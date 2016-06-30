@@ -12,13 +12,48 @@
 ldapuser = "cn=admin,dc=dnsdtest,dc=com"
 # Password del usuario ldap
 ldappasswd = "izanami"
-
+# IP del servidor ldap
+ldaphost = "127.0.0.1"
+# Puerto del servidor ldap
+ldapport = "389"
+# Base del servidor
+ldapbase = "dc=dnsdtest,dc=com"
+# Dependiendo del tipo de encriptacion que utiliza el servidor
+# se debería cambiar el siguiente parametro
+#  :encryption => :simple_tls,
+# Usuario de gmail, para este ejemplo, con la opcion de "aplicaciones menos seguras" activada.
+# Este sera el remitente de los mails informativos
+# Este que viene seteado funciona:
+gmailuser = "itchallengetest@gmail.com"
+# Contraseña del usuario de gmail.
+gmailpasswd = "quinn1234"
 
 #################################################
 
 require 'rubygems'
 require 'net/ldap'
 require 'csv'
+require 'mail'
+
+#################################################
+# Configuro opciones de mail
+#################################################
+
+options = {
+  :address => "smtp.gmail.com",
+  :port => 587,
+  :domain => "localhost",
+  :user_name => gmailuser,
+  :password => gmailpasswd,
+  :authentication => 'plain',
+  :enable_starttls_auto => true
+}
+
+Mail.defaults do
+  delivery_method :smtp, options
+end
+
+
 
 #################################################
 # Conexion con ldap
@@ -36,10 +71,10 @@ end
 # Dejo establecidos los parametros de  conexion con ldap
 # Con este metodo no hay trafico de red, todavia.
 
-ldap = Net::LDAP.new :host => "127.0.0.1", # Hacer global
-:port => "389",
+ldap = Net::LDAP.new :host => ldaphost,
+:port => ldapport,
 #:encryption => :simple_tls,
-:base => "dc=dnsdtest,dc=com",
+:base => ldapbase,
 :auth => {
   :method => :simple,
   :username => ldapuser,
@@ -84,52 +119,73 @@ get_ldap_response(ldap)
 #################################################
 puts ' '
 puts '********************'
-puts 'Importando CSV:'
-puts '********************'
-puts ' '
-
-csvarray = CSV.read("usuarios.csv", {encoding: "UTF-8", headers: true, header_converters: :symbol, converters: :all})
-
-hashed_data = csvarray.map { |d| d.to_hash }
-
-hashed_data.each { |data|
-  puts data[:nombre]
-  adduser(:nombre, :apellido, :nombre)
-}
-
-#################################################
-# Creo nuevo usuario
-#################################################
-puts ' '
-puts '********************'
 puts 'Creando usuarios:'
 puts '********************'
 puts ' '
 
-dn = "uid=test,ou=users,dc=dnsdtest,dc=com"
+puts 'Ingrese la direccion del archivo CSV a importar:'
+puts 'Ejemplo: CSVdummy/usuarios.csv'
+puts ' '
+csvfile = gets.chomp
+puts ' '
 
-first_name = "TEST"
-last_name = "JEST"
-username = "testjest"
-fullname = first_name + " " + last_name
-
-attrs = {
-  #:objectclass => ["top", "person"],
-  :cn => fullname,
-  :sn => last_name.capitalize,
-  #:givenname => first_name.capitalize,
-  #:displayname => fullname,
-  #:name => fullname,
-  #:samaccountname => username,
-  #:unicodePwd => '"password"'.encode("utf-16")
-}
-ldap.add(dn: dn, attributes: attrs)
-
-if ldap.get_operation_result.code != 0
-  puts "Failed to add user #{fullname}"
-else
-  puts "Added user #{fullname}"
+while (!File.file?(csvfile)) do
+  puts 'El path isngresado es incorrecto, vuelva a intentarlo.'
+  puts ' '
+  csvfile = gets.chomp
+  puts ' '
 end
+
+csvarray = CSV.read(csvfile, {encoding: "UTF-8", headers: true, header_converters: :symbol, converters: :all})
+
+hashed_data = csvarray.map { |d| d.to_hash }
+
+hashed_data.each { |data|
+
+  # Todo esto tendria que estar en una funcion aparte.
+
+  dn = "uid=test,ou=users,dc=dnsdtest,dc=com"
+
+  first_name = data[:nombre]
+  last_name = data[:apellido]
+  username = first_name[0].downcase + last_name.downcase
+  fullname = first_name + " " + last_name
+  usermail = data[:email]
+
+  attrs = {
+    #:objectclass => ["top", "person"],
+    :cn => fullname,
+    :sn => last_name.capitalize,
+    #:givenname => first_name.capitalize,
+    #:displayname => fullname,
+    #:name => fullname,
+    #:samaccountname => username,
+    #:unicodePwd => '"password"'.encode("utf-16")
+  }
+  ldap.add(dn: dn, attributes: attrs)
+
+  if ldap.get_operation_result.code != 0
+    puts "Failed to add user #{fullname}"
+
+    Mail.deliver do
+      to data[:email]
+      from 'itchallengetest@gmail.com'
+      subject 'No se ha podido crear su usuario.'
+      body 'No se ha podido crear su nuevo usuario para acceder a ' + ldaphost + ', ' + username
+    end
+
+  else
+    puts "Added user #{fullname}"
+
+    Mail.deliver do
+      to data[:email]
+      from 'itchallengetest@gmail.com'
+      subject 'Su nuevo usuario a sido creado.'
+      body 'Su nuevo usuario para acceder a ' + ldaphost + 'es: ' + username
+    end
+
+  end
+}
 
 #################################################
 # Fin
